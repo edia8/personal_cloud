@@ -7,6 +7,7 @@
 # 3. Un-ignore specific source files and config
 !*.c
 !*.h
+!*.hpp
 !*.cpp
 !Makefile
 !.gitignore
