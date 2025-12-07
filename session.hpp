@@ -4,6 +4,7 @@
 #include    <vector>
 #include    <pthread.h>
 #include    <random>
+#include    <unistd.h>
 
 using namespace std;
 
@@ -30,8 +31,6 @@ class SessionManager {
 private:
     unordered_map<unsigned long, int> tokenToUserID;
     unordered_map<int,ClientStat> sessions;
-    // Multiple threads can call is_authenticated() at the same time (Shared Lock)
-    // Only ONE thread can call add/remove/authenticate at a time (Unique Lock)
     pthread_rwlock_t lock = PTHREAD_RWLOCK_INITIALIZER;
     pthread_rwlock_t token_lock = PTHREAD_RWLOCK_INITIALIZER;
 public:
@@ -99,5 +98,31 @@ public:
         }
         pthread_rwlock_unlock(&token_lock);
         return uid;
+    }
+
+    void logout_user(int user_id) {
+        //remove DATA sessions
+        pthread_rwlock_wrlock(&lock);
+        for(auto it = sessions.begin(); it != sessions.end(); ) {
+            if(it->second.user_id == user_id && it->second.type == SocketType::DATA) {
+                //daca inchid socket-ul este scos din epoll
+                close(it->first); 
+                it = sessions.erase(it);
+            } else {
+                ++it;
+            }
+        }
+        pthread_rwlock_unlock(&lock);
+
+        //scot token-urile
+        pthread_rwlock_wrlock(&token_lock);
+        for(auto it = tokenToUserID.begin(); it != tokenToUserID.end(); ) {
+            if(it->second == user_id) {
+                it = tokenToUserID.erase(it);
+            } else {
+                ++it;
+            }
+        }
+        pthread_rwlock_unlock(&token_lock);
     }
 };

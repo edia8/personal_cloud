@@ -14,6 +14,7 @@ constexpr unsigned char PREPARE_UPLOAD = 0x13;
 constexpr unsigned char UPLOAD = 0x03;
 constexpr unsigned char LIST = 0x04;
 constexpr unsigned char DELETE = 0x05;
+constexpr unsigned char LOGOUT = 0x0A;
 
 constexpr unsigned char ERROR = 0xFF;
 constexpr unsigned char ERR_ALR_REG = 0xF1;
@@ -35,14 +36,3 @@ struct LinkData {
 struct LoginResponse {
     unsigned long session_token;
 };
-
-/*Implementation Guide for You (Next Steps)
-Thread Pool (threadpool.h):
-Look at process_task. This is the brain.
-Look at handle_login. Currently, it compares strings "admin"/"secret". You need to add SQLite logic there.
-Network (network.h):
-Look at handle_client_data. This is where the Binary Protocol is enforced.
-Currently, it does a "naive" recv (it assumes the network is fast enough to send the whole packet instantly). Later, you will need to implement a buffer loop to handle "partial packets" for large file uploads.
-Session (session.h):
-This is fully functional. It uses a shared_mutex so 100 threads can read is_authenticated simultaneously without slowing each other down.
-This architecture gives you the Security (Gatekeeper) and Performance (Epoll/Threads) you asked for.*/

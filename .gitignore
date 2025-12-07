@@ -1,14 +1,5 @@
-# 1. Ignore EVERYTHING
-*
-
-# 2. Un-ignore directories (so git can look inside them)
-!*/
-
-# 3. Un-ignore specific source files and config
-!*.c
-!*.h
-!*.hpp
-!*.cpp
-!Makefile
-!.gitignore
-!README.md
+build/
+server
+client
+user_database.db
+.vscode/

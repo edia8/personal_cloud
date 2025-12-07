@@ -17,7 +17,7 @@ public:
             exit(1);
         }
 
-        // 2. Create Table if it doesn't exist
+        //Create Table if it doesn't exist
         const char* sql = 
             "CREATE TABLE IF NOT EXISTS users ("
             "id INTEGER PRIMARY KEY AUTOINCREMENT, "
@@ -57,7 +57,7 @@ public:
             cerr << "Register fail: " << sqlite3_errmsg(db) << std::endl;
         }
 
-        // 5. Cleanup
+        //Cleanup
         sqlite3_finalize(stmt);
         pthread_rwlock_unlock(&db_lock);
         return success;
@@ -74,7 +74,7 @@ public:
 
         int login_success = -1;
 
-        // 2. Execute & Fetch Result
+        //Execute & Fetch Result
         if (sqlite3_step(stmt) == SQLITE_ROW) {
             // User found
             int user_id = sqlite3_column_int(stmt, 0);
@@ -83,7 +83,7 @@ public:
             if (db_hash_ptr) {
                 std::string db_hash = reinterpret_cast<const char*>(db_hash_ptr);
 
-                // 3. Verify Password
+                //Verify Password
                 if (db_hash == passwd) { 
                     login_success = user_id;
                 }
