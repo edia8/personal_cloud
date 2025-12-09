@@ -12,8 +12,8 @@ MainWindow::MainWindow(QWidget *parent)
     ui->setupUi(this);
 
     // Connect to server on startup
-    if (!client.connect("127.0.0.1", PORT)) {
-        QMessageBox::critical(this, "Connection Error", "Could not connect to server at 127.0.0.1:" + QString::number(PORT));
+    if (!client.connect("10.100.0.30", PORT)) {
+        QMessageBox::critical(this, "Connection Error", "Could not connect to server at 10.100.0.30:" + QString::number(PORT));
     }
 
     // --- YOUR LOGIC GOES HERE ---

@@ -1,3 +1,10 @@
+/*COMPILARE SERVER:
+
+gcc -c sqlite3.c -o sqlite3.o
+g++ server.cpp sqlite3.o -o server
+
+*/
+
 #include <iostream>
 #include "session.hpp"
 #include "threadpool.hpp"

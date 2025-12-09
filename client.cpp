@@ -65,7 +65,7 @@ void ClientBackend::close_client() {
 
 void ClientBackend::send_link_packet(unsigned long token) {
     if (!data_sock.is_valid()) {
-        data_sock.connect_to_server("127.0.0.1", PORT); 
+        data_sock.connect_to_server("10.100.0.30", PORT); 
     }
 
     LinkData payload;
@@ -89,7 +89,7 @@ void ClientBackend::send_link_packet(unsigned long token) {
     }
 }
 
-bool ClientBackend::register_user(const string &username, const string &password) {
+int ClientBackend::register_user(const string &username, const string &password) {
     if (!user_sock.is_valid()) {
         cerr << "Not connected.\n";
         return 0;

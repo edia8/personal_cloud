@@ -67,7 +67,7 @@ class ClientBackend {
 public:
     bool connect(string ip, int port);
     void send_link_packet(unsigned long token);
-    bool register_user(const string &user, const string &pass);
+    int register_user(const string &user, const string &pass);
     unsigned long login(const string &user, const string &pass);
     string upload(string filename);
     string download(string filename);
