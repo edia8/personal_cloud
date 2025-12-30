@@ -68,7 +68,12 @@ public:
                     handle_new_connection();
                 }
                 else {
-                    handle_client_data(curent_fd);
+                    if (events[i].events & EPOLLOUT) {
+                        thread_pool.resume_download(curent_fd, epoll_fd);
+                    }
+                    if (events[i].events & EPOLLIN) {
+                        handle_client_data(curent_fd);
+                    }
                 }
             }
         }

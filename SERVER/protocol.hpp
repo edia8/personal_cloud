@@ -35,4 +35,28 @@ struct LinkData {
 };
 struct LoginResponse {
     unsigned long session_token;
+    int user_id;
 };
+
+struct ListRequest {
+    int parent_id;
+};
+
+struct FileInfo {
+    int id;
+    char name[64];
+    unsigned long size;
+    bool is_folder;
+};
+
+struct PrepareUploadRequest {
+    unsigned long filesize;
+    char filename[64];
+    int parent_id;
+};
+
+//functie de send care nu trimite data partial
+bool send_full_packet(int fd, const void* data, unsigned long length);
+
+// functie de recieve care nu primeste data partial
+bool recv_full_packet(int fd, void* buffer, unsigned long length);

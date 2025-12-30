@@ -8,15 +8,21 @@ set(CMAKE_AUTORCC ON)
 set(CMAKE_AUTOUIC ON)
 find_package(Qt6 REQUIRED COMPONENTS Widgets Sql) 
 add_executable(MyQtApp 
-    main.cpp 
-    mainwindow.cpp 
-    mainwindow.hpp 
-    mainwindow.ui
-    client.cpp
-    client.hpp
-    fileexplorerwindow.cpp
-    fileexplorerwindow.hpp
-    fileexplorerwindow.ui
+    CLIENT/main.cpp 
+    CLIENT/UI/mainwindow.cpp 
+    CLIENT/UI/mainwindow.hpp 
+    CLIENT/UI/mainwindow.ui
+    CLIENT/client.cpp
+    CLIENT/client.hpp
+    CLIENT/UI/fileexplorerwindow.cpp
+    CLIENT/UI/fileexplorerwindow.hpp
+    CLIENT/UI/fileexplorerwindow.ui
 )
+target_include_directories(MyQtApp PRIVATE 
+    ${CMAKE_CURRENT_SOURCE_DIR}/PROTOCOL
+    ${CMAKE_CURRENT_SOURCE_DIR}/CLIENT
+    ${CMAKE_CURRENT_SOURCE_DIR}/CLIENT/UI
+)
+
 target_link_libraries(MyQtApp PRIVATE Qt6::Widgets Qt6::Sql)
 

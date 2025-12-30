@@ -4,3 +4,5 @@ client
 user_database.db
 .vscode/
 sqlite3.o
+/SERVER/storage/
+compile.sh

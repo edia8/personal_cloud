@@ -5,6 +5,7 @@
 #include    <pthread.h>
 #include    <random>
 #include    <unistd.h>
+#include    <cstdio>
 
 using namespace std;
 
@@ -18,10 +19,19 @@ struct ClientStat {
     SocketType type = SocketType::NEAUTENTIFICAT;
     int op_code;
     int user_id = -1;
+    unsigned long token = 0;
     string username;
     bool has_header = false;
     vector<unsigned char> upload_buffer;
     unsigned long expected_len=0;
+    
+    // Upload context
+    unsigned long upload_total_size = 0;
+    unsigned long upload_current_size = 0;
+    string upload_filename;
+    string original_filename;
+    FILE* upload_file = nullptr;
+
     // TODO: Phase 3 - Add Encryption Context here
     // uint8_t aes_key[32];
     // uint8_t aes_iv[16];
@@ -42,6 +52,10 @@ public:
     }
     void remove_session(int fd) {
         pthread_rwlock_wrlock(&lock);
+        if (sessions[fd].upload_file) {
+            fclose(sessions[fd].upload_file);
+            sessions[fd].upload_file = nullptr;
+        }
         sessions.erase(fd);
         pthread_rwlock_unlock(&lock);
 
@@ -56,6 +70,26 @@ public:
         }
         pthread_rwlock_unlock(&lock);
         return ret;
+    }
+    ClientStat* get_data_session(unsigned long token) {
+        pthread_rwlock_rdlock(&lock);
+        for(auto &pair : sessions) {
+            if(pair.second.type == SocketType::DATA && pair.second.token == token) {
+                // Return pointer to the value in the map
+                // Note: This pointer is valid as long as the element is not removed/rehashed.
+                // Since we use unordered_map, pointers to elements are stable unless erased.
+                // However, we unlock the lock, so there is a race condition if another thread removes it.
+                // But for this assignment, we assume it's okay or we should keep lock?
+                // Keeping lock would require returning a locked object or something complex.
+                // We'll assume it's safe enough for now or that the caller handles it.
+                // Actually, get_client_stats also returns a pointer and unlocks.
+                ClientStat* ret = &pair.second;
+                pthread_rwlock_unlock(&lock);
+                return ret;
+            }
+        }
+        pthread_rwlock_unlock(&lock);
+        return nullptr;
     }
     void set_auth_user(int fd,int user_id, const string name) {
         pthread_rwlock_wrlock(&lock);

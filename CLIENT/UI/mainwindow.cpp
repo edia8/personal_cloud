@@ -3,7 +3,8 @@
 #include "ui_mainwindow.h"
 #include <qtoolbutton.h>
 #include <QMessageBox>
-
+#define IP "127.0.0.1"
+#define SV "10.100.0.30"
 MainWindow::MainWindow(QWidget *parent)
     : QMainWindow(parent)
     , ui(new Ui::MainWindow) // Initialize the UI pointer
@@ -12,7 +13,7 @@ MainWindow::MainWindow(QWidget *parent)
     ui->setupUi(this);
 
     // Connect to server on startup
-    if (!client.connect("10.100.0.30", PORT)) {
+    if (!client.connect(IP, PORT)) {
         QMessageBox::critical(this, "Connection Error", "Could not connect to server at 10.100.0.30:" + QString::number(PORT));
     }
 

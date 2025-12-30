@@ -6,11 +6,15 @@ g++ server.cpp sqlite3.o -o server
 */
 
 #include <iostream>
+#include <ctime>
+#include <csignal>
 #include "session.hpp"
 #include "threadpool.hpp"
 #include "network.hpp"
 
 int main() {
+    signal(SIGPIPE, SIG_IGN);
+    srand(time(nullptr));
     // 1. Initialize Core Components
     std::cout << "Initializing Session Manager...\n";
     SessionManager session_mgr;
