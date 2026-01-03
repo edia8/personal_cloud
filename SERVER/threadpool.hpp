@@ -75,7 +75,7 @@ private:
         }
     }
     void process_task(Task &task) {
-    ClientStat *cs = session_manager.get_client_stats(task.socket_fd);
+    shared_ptr<ClientStat> cs = session_manager.get_client_stats(task.socket_fd);
     if(cs == nullptr) return;
 
     char buffer[4096];
@@ -114,7 +114,7 @@ private:
             if(cs->upload_buffer.size() >= cs->expected_len) {
                 vector<unsigned char> data(cs->upload_buffer.begin(),cs->upload_buffer.begin()+cs->expected_len);
                 cs->upload_buffer.erase(cs->upload_buffer.begin(),cs->upload_buffer.begin()+cs->expected_len);
-                    execute_command(task.socket_fd, task.epoll_fd, cs, data);
+                    execute_command(task.socket_fd, task.epoll_fd, cs.get(), data);
                     cs->op_code = RESET_CODE;
                     cs->has_header = false;
                     cs->expected_len = 0;
@@ -139,14 +139,14 @@ private:
             if(cs->op_code == REGISTER) {
                 register_handler(fd,cs,data);
             }
-            if(cs->op_code == LOGIN) {
+            else if(cs->op_code == LOGIN) {
                 login_handler(fd,cs,data);
             }
             else if(cs->op_code == DATA_LINK) {
                 link_handler(fd,cs,data);
             }
             else {
-                cout<<"Actiune invalida 1"<<cs->op_code<<'\n';return;
+                cout<<"Actiune invalida 1 "<<cs->op_code<<'\n';return;
             }
         } else if(cs->type == SocketType::USER) {
             if(cs->op_code == LIST) {
@@ -160,6 +160,9 @@ private:
             }
             else if(cs->op_code == DELETE) {
                 delete_handler(fd,cs,data);
+            }
+            else if(cs->op_code == SHARE_FILE) {
+                share_handler(fd,cs,data);
             }
             else if(cs->op_code == LOGOUT) {
                 logout_handler(fd,cs,data);
@@ -252,32 +255,28 @@ private:
         cout << "User " << uid << " logged out.\n";
     }
     void list_handler(int fd, ClientStat *cs, vector<unsigned char> &data) {
-                        ListRequest* req = (ListRequest*)data.data();
-                int parent_id = req->parent_id;
-                
-                vector<DataBase::FileEntry> files = db.get_files(cs->user_id, parent_id);
-                
-                vector<FileInfo> response_data;
-                for(const auto& f : files) {
-                    FileInfo fi;
-                    fi.id = f.id;
-                    strncpy(fi.name, f.name.c_str(), 63);
-                    fi.name[63] = 0;
-                    fi.size = f.size;
-                    fi.is_folder = f.is_folder;
-                    response_data.push_back(fi);
-                }
-                
-                Header h;
-                h.packet_identifier = PACKET_IDENTIFIER;
-                h.op_code = OK;
-                h.data_len = htobe64(response_data.size() * sizeof(FileInfo));
-                
-                write(fd, &h, sizeof(h));
-                if (!response_data.empty()) {
-                    write(fd, response_data.data(), response_data.size() * sizeof(FileInfo));
-                }
-                cout << "Sent file list for user " << cs->user_id << " folder " << parent_id << "\n";
+        vector<DataBase::FileEntry> files = db.get_files(cs->user_id);
+        
+        vector<FileInfo> response_data;
+        for(const auto& f : files) {
+            FileInfo fi;
+            fi.id = f.id;
+            strncpy(fi.name, f.name.c_str(), 63);
+            fi.name[63] = 0;
+            fi.size = f.size;
+            response_data.push_back(fi);
+        }
+        
+        Header h;
+        h.packet_identifier = PACKET_IDENTIFIER;
+        h.op_code = OK;
+        h.data_len = htobe64(response_data.size() * sizeof(FileInfo));
+        
+        write(fd, &h, sizeof(h));
+        if (!response_data.empty()) {
+            write(fd, response_data.data(), response_data.size() * sizeof(FileInfo));
+        }
+        cout << "Sent file list for user " << cs->user_id << "\n";
     }
     void prepare_download_handler(int fd, ClientStat *cs, vector<unsigned char> &data) {
         Header h = {0, OK, PACKET_IDENTIFIER};
@@ -288,9 +287,8 @@ private:
         PrepareUploadRequest* req = (PrepareUploadRequest*)data.data();
         unsigned long filesize = be64toh(req->filesize);
         string original_filename = req->filename;
-        int folder_id = ntohl(req->parent_id);
-        if(db.exist_already(session_manager.get_user_id(fd),original_filename,folder_id)) {
-                cerr << "PREPARE_UPLOAD: A file with the same name already exists in the directory.\n";
+        if(db.exist_already(session_manager.get_user_id(fd),original_filename)) {
+                cerr << "PREPARE_UPLOAD: A file with the same name already exists.\n";
                 Header h = {0, ERROR, PACKET_IDENTIFIER};
                 write(fd, &h, sizeof(h));
                 return;
@@ -298,9 +296,9 @@ private:
 
         // Find the data socket for this user
         cout << "PREPARE_UPLOAD: User Token " << cs->token << ". Looking for Data Session...\n";
-        ClientStat* data_cs = session_manager.get_data_session(cs->token);
+        shared_ptr<ClientStat> data_cs = session_manager.get_data_session(cs->token);
         if (data_cs) {
-            cout << "PREPARE_UPLOAD: Found Data Session at " << data_cs << " (FD: " << "unknown" << ")\n";
+            cout << "PREPARE_UPLOAD: Found Data Session at " << data_cs.get() << " (FD: " << "unknown" << ")\n";
             data_cs->upload_total_size = filesize;
             data_cs->upload_current_size = 0;
             data_cs->original_filename = original_filename;
@@ -352,10 +350,14 @@ private:
         bool db_success = db.remove_file_entry(cs->user_id, filename);
         
         // Delete from Disk
+        string backup_path = full_path;
+        backup_path.erase(0,7);
+        backup_path = "backup"+backup_path;
         int unlink_ret = unlink(full_path.c_str());
+        int unlink2_ret = unlink(backup_path.c_str());
         
         string response_buffer;
-        if (db_success && unlink_ret == 0) {
+        if (db_success && unlink_ret == 0 && unlink2_ret == 0) {
              response_buffer = "Delete Successful: " + filename;
         } else {
              response_buffer = "Delete Failed: " + filename;
@@ -372,11 +374,47 @@ private:
         write(fd,response_buffer.c_str(),response_buffer.size());
         cout<<"Delete processed for " << full_path << "\n";
     }
+    void share_handler(int fd, ClientStat *cs, vector<unsigned char> &data) {
+        ShareRequest* req = (ShareRequest*)data.data();
+        string filename = req->filename;
+        string target_username = req->target_username;
+
+        cout << "Share request: " << filename << " -> " << target_username << "\n";
+
+        int target_uid = db.get_user_id_by_name(target_username);
+        if (target_uid == -1) {
+            Header h = {0, ERROR, PACKET_IDENTIFIER};
+            write(fd, &h, sizeof(h));
+            cout << "Share failed: Target user not found.\n";
+            return;
+        }
+
+        int file_id = db.get_file_id(cs->user_id, filename);
+        if (file_id == -1) {
+            Header h = {0, ERROR, PACKET_IDENTIFIER};
+            write(fd, &h, sizeof(h));
+            cout << "Share failed: File not found or not owned by user.\n";
+            return;
+        }
+
+        if (db.share_file(file_id, target_uid)) {
+            Header h = {0, OK, PACKET_IDENTIFIER};
+            write(fd, &h, sizeof(h));
+            cout << "Share success.\n";
+        } else {
+            Header h = {0, ERROR, PACKET_IDENTIFIER};
+            write(fd, &h, sizeof(h));
+            cout << "Share failed: DB error.\n";
+        }
+    }
     void upload_handler(int fd, ClientStat *cs, vector<unsigned char> &data) {
         if (!cs->upload_file) {
             cerr << "Upload handler called but no file open. Session: " << cs << ", Token: " << cs->token << "\n";
             return;
         }
+        string user_backup_dir = "backup/" + to_string(cs->user_id);
+        mkdir("backup",0777);
+        mkdir(user_backup_dir.c_str(),0777);
 
         unsigned long written = fwrite(data.data(), 1, data.size(), cs->upload_file);
         if (written != data.size()) {
@@ -393,8 +431,8 @@ private:
             cout << "Upload complete. File saved as " << cs->upload_filename << "\n";
 
             // Create storage directory
-            string user_storage_dir = "SERVER/storage/" + to_string(cs->user_id);
-            mkdir("SERVER/storage", 0777); 
+            string user_storage_dir = "storage/" + to_string(cs->user_id);
+            mkdir("storage", 0777); 
             mkdir(user_storage_dir.c_str(), 0777);
 
             // Generate physical filename
@@ -412,6 +450,31 @@ private:
                 }
                 db.add_file_entry(cs->user_id, display_name, final_path, cs->upload_total_size);
                 cout << "File moved to " << final_path << " and DB entry added. Display Name: " << display_name << "\n";
+
+                // Backup Logic
+                string backup_path = user_backup_dir + "/" + physical_filename;
+                
+                int source_fd = open(final_path.c_str(), O_RDONLY);
+                int dest_fd = open(backup_path.c_str(), O_WRONLY | O_CREAT | O_TRUNC, 0644);
+
+                if (source_fd >= 0 && dest_fd >= 0) {
+                    struct stat stat_source;
+                    fstat(source_fd, &stat_source);
+                    
+                    long offset = 0;
+                    long bytes_sent = sendfile(dest_fd, source_fd, &offset, stat_source.st_size);
+                    
+                    if (bytes_sent == stat_source.st_size) {
+                        cout << "File backed up to " << backup_path << " (Zero-Copy)\n";
+                    } else {
+                        cerr << "Backup incomplete or failed. Sent: " << bytes_sent << "/" << stat_source.st_size << "\n";
+                    }
+                } else {
+                    cerr << "Failed to open files for backup at " << backup_path << "\n";
+                }
+                
+                if (source_fd >= 0) close(source_fd);
+                if (dest_fd >= 0) close(dest_fd);
             }
 
             Header h;

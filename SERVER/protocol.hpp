@@ -14,6 +14,7 @@ constexpr unsigned char PREPARE_UPLOAD = 0x13;
 constexpr unsigned char UPLOAD = 0x03;
 constexpr unsigned char LIST = 0x04;
 constexpr unsigned char DELETE = 0x05;
+constexpr unsigned char SHARE_FILE = 0x0C;
 constexpr unsigned char LOGOUT = 0x0A;
 
 constexpr unsigned char ERROR = 0xFF;
@@ -28,7 +29,7 @@ unsigned char packet_identifier;
 
 struct LoginData {
     unsigned char username[32];
-    unsigned char password[64];
+    unsigned char password[128];
 };
 struct LinkData {
     unsigned long session_token;
@@ -38,22 +39,23 @@ struct LoginResponse {
     int user_id;
 };
 
-struct ListRequest {
-    int parent_id;
-};
-
 struct FileInfo {
     int id;
     char name[64];
     unsigned long size;
-    bool is_folder;
 };
 
 struct PrepareUploadRequest {
     unsigned long filesize;
     char filename[64];
-    int parent_id;
 };
+
+struct ShareRequest {
+    char filename[64];
+    char target_username[32];
+};
+
+
 
 //functie de send care nu trimite data partial
 bool send_full_packet(int fd, const void* data, unsigned long length);

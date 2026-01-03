@@ -1,4 +1,5 @@
 #pragma once
+#include    <memory>
 #include    <unordered_map>
 #include    <string>
 #include    <vector>
@@ -40,50 +41,45 @@ struct ClientStat {
 class SessionManager {
 private:
     unordered_map<unsigned long, int> tokenToUserID;
-    unordered_map<int,ClientStat> sessions;
+    unordered_map<int,shared_ptr<ClientStat>> sessions;
     pthread_rwlock_t lock = PTHREAD_RWLOCK_INITIALIZER;
     pthread_rwlock_t token_lock = PTHREAD_RWLOCK_INITIALIZER;
 public:
     //epoll
     void add_session(int fd) {
         pthread_rwlock_wrlock(&lock);
-        sessions[fd] = ClientStat();
+        sessions[fd] = make_shared<ClientStat>();
         pthread_rwlock_unlock(&lock);
     }
     void remove_session(int fd) {
         pthread_rwlock_wrlock(&lock);
-        if (sessions[fd].upload_file) {
-            fclose(sessions[fd].upload_file);
-            sessions[fd].upload_file = nullptr;
+        auto it = sessions.find(fd);
+        if (it != sessions.end()) {
+            if (it->second->upload_file) {
+                fclose(it->second->upload_file);
+                it->second->upload_file = nullptr;
+            }
+            sessions.erase(it);
         }
-        sessions.erase(fd);
         pthread_rwlock_unlock(&lock);
 
     }
     //by thread
-    ClientStat* get_client_stats(int fd) {
+    shared_ptr<ClientStat> get_client_stats(int fd) {
         pthread_rwlock_rdlock(&lock);
         auto it = sessions.find(fd);
-        ClientStat *ret = nullptr;
+        shared_ptr<ClientStat> ret = nullptr;
         if(it != sessions.end()) {
-            ret =  &it->second;
+            ret =  it->second;
         }
         pthread_rwlock_unlock(&lock);
         return ret;
     }
-    ClientStat* get_data_session(unsigned long token) {
+    shared_ptr<ClientStat> get_data_session(unsigned long token) {
         pthread_rwlock_rdlock(&lock);
         for(auto &pair : sessions) {
-            if(pair.second.type == SocketType::DATA && pair.second.token == token) {
-                // Return pointer to the value in the map
-                // Note: This pointer is valid as long as the element is not removed/rehashed.
-                // Since we use unordered_map, pointers to elements are stable unless erased.
-                // However, we unlock the lock, so there is a race condition if another thread removes it.
-                // But for this assignment, we assume it's okay or we should keep lock?
-                // Keeping lock would require returning a locked object or something complex.
-                // We'll assume it's safe enough for now or that the caller handles it.
-                // Actually, get_client_stats also returns a pointer and unlocks.
-                ClientStat* ret = &pair.second;
+            if(pair.second->type == SocketType::DATA && pair.second->token == token) {
+                shared_ptr<ClientStat> ret = pair.second;
                 pthread_rwlock_unlock(&lock);
                 return ret;
             }
@@ -93,15 +89,19 @@ public:
     }
     void set_auth_user(int fd,int user_id, const string name) {
         pthread_rwlock_wrlock(&lock);
-        sessions[fd].type = SocketType::USER;
-        sessions[fd].user_id = user_id;
-        sessions[fd].username = name;
+        if(sessions.find(fd) != sessions.end()) {
+            sessions[fd]->type = SocketType::USER;
+            sessions[fd]->user_id = user_id;
+            sessions[fd]->username = name;
+        }
         pthread_rwlock_unlock(&lock);
     }
     void set_auth_data(int fd,int user_id) {
         pthread_rwlock_wrlock(&lock);
-        sessions[fd].type = SocketType::DATA;
-        sessions[fd].user_id = user_id;
+        if(sessions.find(fd) != sessions.end()) {
+            sessions[fd]->type = SocketType::DATA;
+            sessions[fd]->user_id = user_id;
+        }
         pthread_rwlock_unlock(&lock);
     }
     int get_user_id(int fd) {
@@ -109,7 +109,7 @@ public:
         int user_id = -1;
         auto it = sessions.find(fd);
         if(it != sessions.end()) {
-            user_id = it->second.user_id;
+            user_id = it->second->user_id;
         }
         pthread_rwlock_unlock(&lock);
         return user_id;
@@ -138,7 +138,7 @@ public:
         //remove DATA sessions
         pthread_rwlock_wrlock(&lock);
         for(auto it = sessions.begin(); it != sessions.end(); ) {
-            if(it->second.user_id == user_id && it->second.type == SocketType::DATA) {
+            if(it->second->user_id == user_id && it->second->type == SocketType::DATA) {
                 //daca inchid socket-ul este scos din epoll
                 close(it->first); 
                 it = sessions.erase(it);

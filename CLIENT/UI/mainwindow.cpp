@@ -43,10 +43,8 @@ MainWindow::MainWindow(QWidget *parent)
         if (token != 0) {
             //QMessageBox::information(this, "Login Success", "Logged in! Token: " + QString::number(token));
             client.send_link_packet(token);
-
-            if(!fileWindow) {
-                fileWindow = new FileExplorerWindow(&client, this);
-            }
+            fileWindow = nullptr;
+            fileWindow = new FileExplorerWindow(&client, this);
             fileWindow->show();
             this->hide();
             ui->lineEdit->clear();
@@ -80,4 +78,7 @@ MainWindow::MainWindow(QWidget *parent)
 
 MainWindow::~MainWindow() {
     delete ui; // Cleanup
+    if(fileWindow) {
+        delete fileWindow;
+    }
 }

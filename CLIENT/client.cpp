@@ -4,15 +4,47 @@
 #include    <sys/stat.h>
 #include    <endian.h>
 #include    <cstdio>
+#include    <openssl/evp.h>
+#include    <sstream>
+#include    <iomanip>
 
 using namespace std;
+
+string sha256(const string& str) {
+    unsigned char hash[EVP_MAX_MD_SIZE];
+    unsigned int lengthOfHash = 0;
+    
+    EVP_MD_CTX* context = EVP_MD_CTX_new();
+    if(context == nullptr) return "";
+
+    if(!EVP_DigestInit_ex(context, EVP_sha256(), nullptr)) {
+        EVP_MD_CTX_free(context);
+        return "";
+    }
+    if(!EVP_DigestUpdate(context, str.c_str(), str.length())) {
+        EVP_MD_CTX_free(context);
+        return "";        
+    }
+    
+    if(EVP_DigestFinal_ex(context, hash, &lengthOfHash)) {
+        EVP_MD_CTX_free(context);
+        
+        char hex_string[65];
+        for(unsigned int i = 0; i < lengthOfHash; ++i)
+            sprintf(hex_string + (i * 2), "%02x", hash[i]);
+        
+        return string(hex_string);
+    }
+    EVP_MD_CTX_free(context);
+    return "";
+}
 
 //functie de send care nu trimite data partial
 bool send_full_packet(int fd, const void* data, unsigned long length) {
     const char* ptr = static_cast<const char*>(data);
     unsigned long total_sent = 0;
     while (total_sent < length) {
-        ssize_t sent = write(fd, ptr + total_sent, length - total_sent);
+        long sent = write(fd, ptr + total_sent, length - total_sent);
         if (sent <= 0) return false;//sv deconectat
         total_sent += sent;
     }
@@ -24,7 +56,7 @@ bool recv_full_packet(int fd, void* buffer, unsigned long length) {
     char* ptr = static_cast<char*>(buffer);
     unsigned long total_received = 0;
     while (total_received < length) {
-        ssize_t r = read(fd, ptr + total_received, length - total_received);
+        long r = read(fd, ptr + total_received, length - total_received);
         if (r <= 0) return false; //sv deconectat
         total_received += r;
     }
@@ -33,6 +65,17 @@ bool recv_full_packet(int fd, void* buffer, unsigned long length) {
 
 bool ClientBackend::connect(string ip, int port) {
     return user_sock.connect_to_server(ip,port);
+}
+
+ClientBackend::~ClientBackend() {
+    if (active_uploads > 0) {
+        cout << "[Client] Waiting for active uploads to finish...\n";
+        while (active_uploads > 0) {
+            usleep(100000); // 100ms
+        }
+        cout << "[Client] All uploads finished.\n";
+    }
+    close_client();
 }
 
 void ClientBackend::close_client() {
@@ -105,8 +148,9 @@ int ClientBackend::register_user(const string &username, const string &password)
     LoginData payload;
     bzero(&payload,sizeof(payload));
 
+    string hashed_pass = sha256(password);
     strncpy((char*)payload.username, username.c_str(), sizeof(payload.username) - 1);
-    strncpy((char*)payload.password, password.c_str(), sizeof(payload.password) - 1);
+    strncpy((char*)payload.password, hashed_pass.c_str(), sizeof(payload.password) - 1);
 
     Header header;
     header.op_code = REGISTER;
@@ -156,8 +200,9 @@ unsigned long ClientBackend::login(const std::string& username, const std::strin
     //bzero pt evitare garbage
     bzero(&payload,sizeof(payload));
     
+    string hashed_pass = sha256(password);
     strncpy((char*)payload.username, username.c_str(), sizeof(payload.username) - 1);
-    strncpy((char*)payload.password, password.c_str(), sizeof(payload.password) - 1);
+    strncpy((char*)payload.password, hashed_pass.c_str(), sizeof(payload.password) - 1);
 
     Header header;
     header.op_code = LOGIN;
@@ -246,7 +291,6 @@ int ClientBackend::upload(string filename) {
     req.filesize = htobe64(filesize);
     strncpy(req.filename, base_filename.c_str(), 63);
     req.filename[63] = '\0';
-    req.parent_id = htonl(req.parent_id);
 
     Header prep_header;
     prep_header.op_code = PREPARE_UPLOAD;
@@ -360,7 +404,6 @@ int ClientBackend::upload(string filename) {
 struct UploadContext {
     ClientBackend* instance;
     string filename;
-    int curent_folder_id;
     void (*callback)(int, void*);
     void* callback_arg;
 };
@@ -371,15 +414,18 @@ static void* upload_thread_func(void* arg) {
     if (ctx->callback) {
         ctx->callback(res, ctx->callback_arg);
     }
+    ctx->instance->notify_upload_finished();
     delete ctx;
     return nullptr;
 }
 
-void ClientBackend::upload_async(string filename,int curent_folder_id, void (*callback)(int, void*), void* arg) {
-    UploadContext* ctx = new UploadContext{this, filename,curent_folder_id, callback, arg};
+void ClientBackend::upload_async(string filename, void (*callback)(int, void*), void* arg) {
+    UploadContext* ctx = new UploadContext{this, filename, callback, arg};
     pthread_t thread;
+    active_uploads++;
     if (pthread_create(&thread, nullptr, upload_thread_func, ctx) != 0) {
         cerr << "Failed to create upload thread.\n";
+        active_uploads--;
         delete ctx;
         // Optionally call callback with error immediately
         if (callback) callback(-1, arg);
@@ -488,6 +534,7 @@ int ClientBackend::download(string filename) {
         if (!recv_full_packet(data_sock.get(), buffer, chunk)) {
             cerr << "Connection lost during download.\n";
             fclose(f);
+            remove(filename.c_str());
             pthread_mutex_unlock(&mutex_data);
             return 11;
         }
@@ -562,21 +609,17 @@ string ClientBackend::del(string filename) {
     return string(buffer.data());
 }
 
-vector<FileInfo> ClientBackend::list_files(int parent_id) {
+vector<FileInfo> ClientBackend::list_files() {
     if (!user_sock.is_valid()) return {};
-
-    ListRequest req;
-    req.parent_id = parent_id;
 
     Header header;
     header.op_code = LIST;
     header.packet_identifier = PACKET_IDENTIFIER;
-    header.data_len = htobe64(sizeof(req));
+    header.data_len = 0;
 
     vector<unsigned char> packet;
-    packet.resize(sizeof(header) + sizeof(req));
+    packet.resize(sizeof(header));
     memcpy(packet.data(), &header, sizeof(header));
-    memcpy(packet.data() + sizeof(header), &req, sizeof(req));
 
     pthread_mutex_lock(&mutex_user);
     if (!send_full_packet(user_sock.get(), packet.data(), packet.size())) {
@@ -605,4 +648,48 @@ vector<FileInfo> ClientBackend::list_files(int parent_id) {
     }
     pthread_mutex_unlock(&mutex_user);
     return files;
+}
+
+string ClientBackend::share_file(string filename, string target_username) {
+    if (!user_sock.is_valid()) {
+        return "Error: Not connected";
+    }
+
+    ShareRequest req;
+    bzero(&req, sizeof(req));
+    
+    strncpy(req.filename, filename.c_str(), sizeof(req.filename) - 1);
+    strncpy(req.target_username, target_username.c_str(), sizeof(req.target_username) - 1);
+
+    Header header;
+    header.op_code = SHARE_FILE;
+    header.packet_identifier = PACKET_IDENTIFIER;
+    header.data_len = htobe64(sizeof(req));
+
+    vector<unsigned char> packet;
+    packet.resize(sizeof(header) + sizeof(req));
+    
+    memcpy(packet.data(), &header, sizeof(header));
+    memcpy(packet.data() + sizeof(header), &req, sizeof(req));
+
+    pthread_mutex_lock(&mutex_user);
+
+    if (!send_full_packet(user_sock.get(), packet.data(), packet.size())) {
+        pthread_mutex_unlock(&mutex_user);
+        return "Error: Failed to send share request";
+    }
+
+    Header resp;
+    if (!recv_full_packet(user_sock.get(), &resp, sizeof(resp))) {
+        pthread_mutex_unlock(&mutex_user);
+        return "Error: Server disconnected";
+    }
+
+    pthread_mutex_unlock(&mutex_user);
+
+    if (resp.op_code == OK) {
+        return "Success: File shared with " + target_username;
+    } else {
+        return "Error: Could not share file (User not found or File invalid)";
+    }
 }

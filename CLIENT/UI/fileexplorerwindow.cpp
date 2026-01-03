@@ -5,6 +5,7 @@
 #include <QMessageBox>
 #include <QFileInfo>
 #include <QDir>
+#include <QInputDialog>
 
 static void upload_callback(int result, void* arg) {
     FileExplorerWindow* window = (FileExplorerWindow*)arg;
@@ -16,23 +17,16 @@ FileExplorerWindow::FileExplorerWindow(ClientBackend* client, QWidget *parent) :
     ui(new Ui::FileExplorerWindow),
     client(client)
 {
+    cout<<"Fereastra construita\n";
     mw = qobject_cast<MainWindow*>(parent);
     ui->setupUi(this);
-
-    // Connect Navigation
-    connect(ui->btnBack, &QPushButton::clicked, this, &FileExplorerWindow::goUp);
-    connect(ui->btnForward, &QPushButton::clicked, this, [=]() {
-        QListWidgetItem* item = ui->fileList->currentItem();
-        if (item) enterFolder(item);
-    });
-    connect(ui->fileList, &QListWidget::itemDoubleClicked, this, &FileExplorerWindow::enterFolder);
 
     // Connect Upload Button
     connect(ui->pushButton, &QPushButton::clicked, this, [=]() {
         QString fileName = QFileDialog::getOpenFileName(this, "Select File to Upload");
         if (!fileName.isEmpty()) {
             std::string path = fileName.toStdString();
-            client->upload_async(path,current_folder_id, upload_callback, this);
+            client->upload_async(path, upload_callback, this);
         }
     });
 
@@ -42,10 +36,6 @@ FileExplorerWindow::FileExplorerWindow(ClientBackend* client, QWidget *parent) :
         if (!item) {
             QMessageBox::warning(this, "Download", "Please select a file.");
             return;
-        }
-        if (item->data(Qt::UserRole + 1).toBool()) { // Is folder
-             QMessageBox::warning(this, "Download", "Cannot download a folder.");
-             return;
         }
         // Remove [DIR] prefix if present (though it shouldn't be for files)
         string filename = item->text().toStdString();
@@ -64,10 +54,6 @@ FileExplorerWindow::FileExplorerWindow(ClientBackend* client, QWidget *parent) :
             return;
         }
         string filename = item->text().toStdString();
-        // Remove [DIR] prefix if present
-        if (item->data(Qt::UserRole + 1).toBool()) {
-             filename = filename.substr(6); // Remove "[DIR] "
-        }
 
         string response = client->del(filename);
 
@@ -82,11 +68,39 @@ FileExplorerWindow::FileExplorerWindow(ClientBackend* client, QWidget *parent) :
     // Connect Refresh Button
     connect(ui->pushButton_Refresh, &QPushButton::clicked, this, &FileExplorerWindow::refresh_list);
 
+    // Connect Share Button
+    connect(ui->pushButton_Share, &QPushButton::clicked, this, [=]() {
+        QListWidgetItem* item = ui->fileList->currentItem();
+        if (!item) {
+            QMessageBox::warning(this, "Share", "Please select a file to share first.");
+            return;
+        }
+        string filename = item->text().toStdString();
+
+        bool ok;
+        QString targetUser = QInputDialog::getText(this, "Share File",
+                                                 "Share '" + item->text() + "' with user:",
+                                                 QLineEdit::Normal,
+                                                 "", &ok);
+        
+        if (ok && !targetUser.isEmpty()) {
+            string userStr = targetUser.toStdString();
+            string result = client->share_file(filename, userStr);
+
+            if (result.find("Error") != string::npos) {
+                QMessageBox::critical(this, "Share Failed", QString::fromStdString(result));
+            } else {
+                QMessageBox::information(this, "Share Success", QString::fromStdString(result));
+            }
+        }
+    });
+
     // Logout
     connect(ui->pushButton_5, &QPushButton::clicked, this, [=]() {
         mw->show();
         this->hide();
         client->close_client();
+        this->~FileExplorerWindow();
     });
 
     refresh_list();
@@ -99,34 +113,11 @@ FileExplorerWindow::~FileExplorerWindow()
 
 void FileExplorerWindow::refresh_list() {
     ui->fileList->clear();
-    vector<FileInfo> files = client->list_files(current_folder_id);
+    vector<FileInfo> files = client->list_files();
     for (const auto& f : files) {
         QListWidgetItem* item = new QListWidgetItem(QString::fromStdString(f.name));
         item->setData(Qt::UserRole, f.id);
-        item->setData(Qt::UserRole + 1, f.is_folder);
-        if (f.is_folder) {
-            // item->setIcon(QIcon::fromTheme("folder")); 
-            item->setText("[DIR] " + item->text());
-        } else {
-            // item->setIcon(QIcon::fromTheme("text-x-generic"));
-        }
         ui->fileList->addItem(item);
-    }
-}
-
-void FileExplorerWindow::goUp() {
-    if (!folder_history.empty()) {
-        current_folder_id = folder_history.top();
-        folder_history.pop();
-        refresh_list();
-    }
-}
-
-void FileExplorerWindow::enterFolder(QListWidgetItem* item) {
-    if (item->data(Qt::UserRole + 1).toBool()) {
-        folder_history.push(current_folder_id);
-        current_folder_id = item->data(Qt::UserRole).toInt();
-        refresh_list();
     }
 }
 

@@ -7,6 +7,8 @@ set(CMAKE_AUTOMOC ON)
 set(CMAKE_AUTORCC ON)
 set(CMAKE_AUTOUIC ON)
 find_package(Qt6 REQUIRED COMPONENTS Widgets Sql) 
+find_package(OpenSSL REQUIRED)
+
 add_executable(MyQtApp 
     CLIENT/main.cpp 
     CLIENT/UI/mainwindow.cpp 
@@ -24,5 +26,5 @@ target_include_directories(MyQtApp PRIVATE
     ${CMAKE_CURRENT_SOURCE_DIR}/CLIENT/UI
 )
 
-target_link_libraries(MyQtApp PRIVATE Qt6::Widgets Qt6::Sql)
+target_link_libraries(MyQtApp PRIVATE Qt6::Widgets Qt6::Sql OpenSSL::SSL OpenSSL::Crypto)
 

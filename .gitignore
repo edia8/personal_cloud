@@ -5,4 +5,5 @@ user_database.db
 .vscode/
 sqlite3.o
 /SERVER/storage/
+SERVER/backup/
 compile.sh

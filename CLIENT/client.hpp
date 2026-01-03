@@ -6,7 +6,7 @@
 #include    <arpa/inet.h>
 #include    <unistd.h>
 #include    <pthread.h>
-#include    <queue>
+#include    <atomic>
 #include    "protocol.hpp"
 
 #define IP "127.0.0.1"
@@ -70,34 +70,21 @@ class ClientBackend {
     bool is_logged_in = false;
     unsigned long token;
     int user_id = -1;
-
-    // Upload Queue
-    struct UploadTask {
-        string filename;
-        int current_folder_id;
-        void (*callback)(int, void*);
-        void* callback_arg;
-    };
-    queue<UploadTask> upload_queue;
-    pthread_mutex_t queue_mutex = PTHREAD_MUTEX_INITIALIZER;
-    pthread_cond_t queue_cond = PTHREAD_COND_INITIALIZER;
-    pthread_t worker_thread;
-    bool stop_worker = false;
-    bool worker_started = false;
-
-    static void* worker_entry(void* arg);
-    void worker_routine();
+    std::atomic<int> active_uploads{0};
 
 public:
+    ~ClientBackend();
     bool connect(string ip, int port);
     void send_link_packet(unsigned long token);
     int register_user(const string &user, const string &pass);
     unsigned long login(const string &user, const string &pass);
     int upload(string filename);
-    void upload_async(string filename,int curent_folder_id, void (*callback)(int, void*), void* arg);
+    void upload_async(string filename, void (*callback)(int, void*), void* arg);
     int download(string filename);
     string del(string filename);
-    vector<FileInfo> list_files(int parent_id);
+    string share_file(string filename, string target_username);
+    vector<FileInfo> list_files();
+    void notify_upload_finished() { active_uploads--; }
     void close_client();
     int get_uid() const { return user_id; }
 };
