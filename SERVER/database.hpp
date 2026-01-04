@@ -3,6 +3,7 @@
 #include    <pthread.h>
 #include    <string>
 #include    <vector>
+#include    <cstring>
 #include    <iostream>
 
 using namespace std;
@@ -70,9 +71,8 @@ public:
             cout << "Shared Files table initialized...\n";
         }
 
-        // Add columns for folder support (if they don't exist)
-        // sqlite3_exec(db, "ALTER TABLE files ADD COLUMN is_folder INTEGER DEFAULT 0;", 0, 0, 0);
-        // sqlite3_exec(db, "ALTER TABLE files ADD COLUMN parent_id INTEGER DEFAULT 0;", 0, 0, 0);
+        // Add columns for encryption support (if they don't exist)
+        sqlite3_exec(db, "ALTER TABLE files ADD COLUMN encryption_key BLOB;", 0, 0, 0);
     }
     ~DataBase() {
         sqlite3_close(db);
@@ -82,14 +82,54 @@ public:
         int id;
         string name;
         unsigned long size;
+        string owner;
+        int user_id;
     };
+
+    struct EncryptionData {
+        unsigned char key[32];
+        bool found;
+    };
+
+    EncryptionData get_encryption_key(int user_id, const string &filename) {
+        EncryptionData data;
+        data.found = false;
+        pthread_mutex_lock(&db_lock);
+        sqlite3_stmt *stmt;
+        const char *sql = "SELECT f.encryption_key FROM files f "
+                          "LEFT JOIN shared_files sf ON f.id = sf.file_id "
+                          "WHERE (f.user_id = ? OR sf.shared_with_user_id = ?) AND f.filename = ?;";
+        
+        if (sqlite3_prepare_v2(db, sql, -1, &stmt, 0) != SQLITE_OK) {
+            pthread_mutex_unlock(&db_lock);
+            return data;
+        }
+
+        sqlite3_bind_int(stmt, 1, user_id);
+        sqlite3_bind_int(stmt, 2, user_id);
+        sqlite3_bind_text(stmt, 3, filename.c_str(), -1, SQLITE_TRANSIENT);
+
+        if (sqlite3_step(stmt) == SQLITE_ROW) {
+            const void* key_blob = sqlite3_column_blob(stmt, 0);
+            int bytes = sqlite3_column_bytes(stmt, 0);
+            if (key_blob && bytes == 32) {
+                memcpy(data.key, key_blob, 32);
+                data.found = true;
+            }
+        }
+
+        sqlite3_finalize(stmt);
+        pthread_mutex_unlock(&db_lock);
+        return data;
+    }
 
     vector<FileEntry> get_files(int user_id) {
         vector<FileEntry> files;
         pthread_mutex_lock(&db_lock);
         sqlite3_stmt *stmt;
-        const char *sql = "SELECT f.id, f.filename, f.size FROM files f "
+        const char *sql = "SELECT f.id, f.filename, f.size, u.username, f.user_id FROM files f "
                           "LEFT JOIN shared_files sf ON f.id = sf.file_id "
+                          "JOIN users u ON f.user_id = u.id "
                           "WHERE f.user_id = ? OR sf.shared_with_user_id = ?;";
         
         if (sqlite3_prepare_v2(db, sql, -1, &stmt, 0) != SQLITE_OK) {
@@ -106,6 +146,8 @@ public:
             fe.id = sqlite3_column_int(stmt, 0);
             fe.name = reinterpret_cast<const char*>(sqlite3_column_text(stmt, 1));
             fe.size = sqlite3_column_int64(stmt, 2);
+            fe.owner = reinterpret_cast<const char*>(sqlite3_column_text(stmt, 3));
+            fe.user_id = sqlite3_column_int(stmt, 4);
             files.push_back(fe);
         }
 
@@ -138,6 +180,29 @@ public:
         sqlite3_finalize(stmt);
         pthread_mutex_unlock(&db_lock);
         return filepath;
+    }
+
+    bool is_file_owner(int user_id, const string &filename) {
+        pthread_mutex_lock(&db_lock);
+        sqlite3_stmt *stmt;
+        const char *sql = "SELECT 1 FROM files WHERE user_id = ? AND filename = ? LIMIT 1;";
+        
+        if (sqlite3_prepare_v2(db, sql, -1, &stmt, 0) != SQLITE_OK) {
+            pthread_mutex_unlock(&db_lock);
+            return false;
+        }
+
+        sqlite3_bind_int(stmt, 1, user_id);
+        sqlite3_bind_text(stmt, 2, filename.c_str(), -1, SQLITE_TRANSIENT);
+
+        bool is_owner = false;
+        if (sqlite3_step(stmt) == SQLITE_ROW) {
+            is_owner = true;
+        }
+
+        sqlite3_finalize(stmt);
+        pthread_mutex_unlock(&db_lock);
+        return is_owner;
     }
 
     int get_user_id_by_name(const string& username) {
@@ -187,6 +252,24 @@ public:
 
     bool share_file(int file_id, int target_user_id) {
         pthread_mutex_lock(&db_lock);
+
+        // Check if already shared
+        sqlite3_stmt *check_stmt;
+        const char *check_sql = "SELECT 1 FROM shared_files WHERE file_id = ? AND shared_with_user_id = ? LIMIT 1;";
+        if (sqlite3_prepare_v2(db, check_sql, -1, &check_stmt, 0) != SQLITE_OK) {
+             pthread_mutex_unlock(&db_lock);
+             return false;
+        }
+        sqlite3_bind_int(check_stmt, 1, file_id);
+        sqlite3_bind_int(check_stmt, 2, target_user_id);
+        if (sqlite3_step(check_stmt) == SQLITE_ROW) {
+            // Already shared
+            sqlite3_finalize(check_stmt);
+            pthread_mutex_unlock(&db_lock);
+            return false; 
+        }
+        sqlite3_finalize(check_stmt);
+
         sqlite3_stmt *stmt;
         const char *sql = "INSERT INTO shared_files (file_id, shared_with_user_id) VALUES (?, ?);";
         
@@ -232,10 +315,10 @@ public:
         return exists;
     }
 
-    bool add_file_entry(int user_id, const string &filename, const string &filepath, unsigned long size) {
+    bool add_file_entry(int user_id, const string &filename, const string &filepath, unsigned long size, const unsigned char* key) {
         pthread_mutex_lock(&db_lock);
         sqlite3_stmt *stmt;
-        const char *sql = "INSERT INTO files (user_id, filename, filepath, size) VALUES (?, ?, ?, ?);";
+        const char *sql = "INSERT INTO files (user_id, filename, filepath, size, encryption_key) VALUES (?, ?, ?, ?, ?);";
         
         if (sqlite3_prepare_v2(db, sql, -1, &stmt, 0) != SQLITE_OK) {
             cerr << "Prepare failed: " << sqlite3_errmsg(db) << endl;
@@ -247,6 +330,7 @@ public:
         sqlite3_bind_text(stmt, 2, filename.c_str(), -1, SQLITE_TRANSIENT);
         sqlite3_bind_text(stmt, 3, filepath.c_str(), -1, SQLITE_TRANSIENT);
         sqlite3_bind_int64(stmt, 4, size);
+        sqlite3_bind_blob(stmt, 5, key, 32, SQLITE_TRANSIENT);
 
         bool success = false;
         if (sqlite3_step(stmt) == SQLITE_DONE) {

@@ -43,11 +43,13 @@ struct FileInfo {
     int id;
     char name[64];
     unsigned long size;
+    char owner[32];
 };
 
 struct PrepareUploadRequest {
     unsigned long filesize;
     char filename[64];
+    unsigned char file_key[32];
 };
 
 struct ShareRequest {

@@ -33,9 +33,7 @@ struct ClientStat {
     string original_filename;
     FILE* upload_file = nullptr;
 
-    // TODO: Phase 3 - Add Encryption Context here
-    // uint8_t aes_key[32];
-    // uint8_t aes_iv[16];
+    unsigned char aes_key[32];
 };
 
 class SessionManager {

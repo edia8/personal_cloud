@@ -1,7 +1,7 @@
 #pragma once
 
 #include <QWidget>
-#include <QListWidgetItem>
+#include <QTreeWidgetItem>
 #include <stack>
 #include "client.hpp"
 

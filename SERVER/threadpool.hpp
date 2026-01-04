@@ -264,6 +264,14 @@ private:
             strncpy(fi.name, f.name.c_str(), 63);
             fi.name[63] = 0;
             fi.size = f.size;
+            
+            if (f.user_id != cs->user_id) {
+                strncpy(fi.owner, f.owner.c_str(), 31);
+                fi.owner[31] = '\0';
+            } else {
+                fi.owner[0] = '\0'; // Blank if user's file
+            }
+            
             response_data.push_back(fi);
         }
         
@@ -302,6 +310,7 @@ private:
             data_cs->upload_total_size = filesize;
             data_cs->upload_current_size = 0;
             data_cs->original_filename = original_filename;
+            memcpy(data_cs->aes_key, req->file_key, 32);
             
             // Generate temp filename
             string temp_filename = "temp_upload_" + to_string(cs->user_id) + "_" + to_string(time(nullptr)) + "_" + to_string(rand()) + ".dat";
@@ -334,6 +343,14 @@ private:
     }
     void delete_handler(int fd, ClientStat *cs, vector<unsigned char> &data) {
         string filename(data.begin(),data.end());
+
+        if (!db.is_file_owner(cs->user_id, filename)) {
+             string response_buffer = "Delete Failed: You do not own this file.";
+             Header h = {htobe64(response_buffer.size()), OK, PACKET_IDENTIFIER};
+             write(fd, &h, sizeof(h));
+             write(fd, response_buffer.c_str(), response_buffer.size());
+             return;
+        }
         
         // Get physical path from DB using display name (filename)
         string full_path = db.get_filepath(cs->user_id, filename);
@@ -381,31 +398,37 @@ private:
 
         cout << "Share request: " << filename << " -> " << target_username << "\n";
 
+        string response_msg;
+        bool success = false;
+
         int target_uid = db.get_user_id_by_name(target_username);
         if (target_uid == -1) {
-            Header h = {0, ERROR, PACKET_IDENTIFIER};
-            write(fd, &h, sizeof(h));
-            cout << "Share failed: Target user not found.\n";
-            return;
-        }
-
-        int file_id = db.get_file_id(cs->user_id, filename);
-        if (file_id == -1) {
-            Header h = {0, ERROR, PACKET_IDENTIFIER};
-            write(fd, &h, sizeof(h));
-            cout << "Share failed: File not found or not owned by user.\n";
-            return;
-        }
-
-        if (db.share_file(file_id, target_uid)) {
-            Header h = {0, OK, PACKET_IDENTIFIER};
-            write(fd, &h, sizeof(h));
-            cout << "Share success.\n";
+            response_msg = "Share Failed: Target user not found.";
+        } else if (target_uid == cs->user_id) {
+            response_msg = "Share Failed: You cannot share a file with yourself.";
         } else {
-            Header h = {0, ERROR, PACKET_IDENTIFIER};
-            write(fd, &h, sizeof(h));
-            cout << "Share failed: DB error.\n";
+            int file_id = db.get_file_id(cs->user_id, filename);
+            if (file_id == -1) {
+                response_msg = "Share Failed: File not found or not owned by you.";
+            } else {
+                if (db.share_file(file_id, target_uid)) {
+                    response_msg = "Share Successful.";
+                    success = true;
+                } else {
+                    response_msg = "Share Failed: Already shared or DB error.";
+                }
+            }
         }
+
+        Header h;
+        h.packet_identifier = PACKET_IDENTIFIER;
+        h.op_code = OK; // Always OK so client reads message
+        h.data_len = htobe64(response_msg.size());
+        
+        write(fd, &h, sizeof(h));
+        write(fd, response_msg.c_str(), response_msg.size());
+        
+        cout << "Share result: " << response_msg << "\n";
     }
     void upload_handler(int fd, ClientStat *cs, vector<unsigned char> &data) {
         if (!cs->upload_file) {
@@ -448,7 +471,7 @@ private:
                 if (display_name.empty()) {
                     display_name = "upload_" + to_string(time(nullptr)) + "_" + to_string(rand());
                 }
-                db.add_file_entry(cs->user_id, display_name, final_path, cs->upload_total_size);
+                db.add_file_entry(cs->user_id, display_name, final_path, cs->upload_total_size, cs->aes_key);
                 cout << "File moved to " << final_path << " and DB entry added. Display Name: " << display_name << "\n";
 
                 // Backup Logic
@@ -499,6 +522,14 @@ private:
             return;
         }
 
+        DataBase::EncryptionData enc_data = db.get_encryption_key(cs->user_id, filename);
+        if (!enc_data.found) {
+            cerr << "Encryption key not found for " << filename << "\n";
+            Header h = {0, ERROR, PACKET_IDENTIFIER};
+            write(fd, &h, sizeof(h));
+            return;
+        }
+
         int file_fd = open(filepath.c_str(), O_RDONLY);
         if (file_fd < 0) {
             Header h;
@@ -519,8 +550,9 @@ private:
         Header h;
         h.packet_identifier = PACKET_IDENTIFIER;
         h.op_code = DOWNLOAD;
-        h.data_len = htobe64(st.st_size);
+        h.data_len = htobe64(st.st_size + 32); // Include Key Size
         write(fd, &h, sizeof(h));
+        write(fd, enc_data.key, 32); // Send Key
 
         // Register State
         pthread_mutex_lock(&download_lock);

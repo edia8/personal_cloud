@@ -5,6 +5,7 @@
 #include    <endian.h>
 #include    <cstdio>
 #include    <openssl/evp.h>
+#include    <openssl/rand.h>
 #include    <sstream>
 #include    <iomanip>
 
@@ -288,9 +289,21 @@ int ClientBackend::upload(string filename) {
 
     //initiere handshake
     PrepareUploadRequest req;
-    req.filesize = htobe64(filesize);
+    
+    unsigned long encrypted_size = (filesize / 16 + 1) * 16;
+    if (filesize % 16 == 0) encrypted_size = filesize + 16;
+    req.filesize = htobe64(encrypted_size);
+
     strncpy(req.filename, base_filename.c_str(), 63);
     req.filename[63] = '\0';
+
+    unsigned char key[32];
+    if (RAND_bytes(key, sizeof(key)) != 1) {
+        cerr << "Failed to generate random key.\n";
+        fclose(file_fd);
+        return 1;
+    }
+    memcpy(req.file_key, key, 32);
 
     Header prep_header;
     prep_header.op_code = PREPARE_UPLOAD;
@@ -333,41 +346,54 @@ int ClientBackend::upload(string filename) {
     cout << "Server is ready for data.\n";
     pthread_mutex_unlock(&mutex_user);
     
-    //trimitem data dupa handshake
-    char buffer[4096];
-    unsigned long total_sent = 0;
+    EVP_CIPHER_CTX *ctx = EVP_CIPHER_CTX_new();
+    EVP_EncryptInit_ex(ctx, EVP_aes_256_ecb(), NULL, key, NULL);
+
+    unsigned char in_buffer[4096];
+    unsigned char out_buffer[4096 + 16]; 
+    int out_len;
     
-    while (total_sent < filesize) {
-        size_t bytes_read = fread(buffer, 1, sizeof(buffer), file_fd);
+    while (true) {
+        size_t bytes_read = fread(in_buffer, 1, sizeof(in_buffer), file_fd);
         if (bytes_read > 0) {
-            Header data_header;
-            data_header.op_code = UPLOAD;
-            data_header.packet_identifier = PACKET_IDENTIFIER;
-            data_header.data_len = htobe64(bytes_read);
+            EVP_EncryptUpdate(ctx, out_buffer, &out_len, in_buffer, bytes_read);
+            
+            if (out_len > 0) {
+                Header data_header;
+                data_header.op_code = UPLOAD;
+                data_header.packet_identifier = PACKET_IDENTIFIER;
+                data_header.data_len = htobe64(out_len);
 
-            vector<unsigned char> packet;
-            packet.resize(sizeof(data_header) + bytes_read);
+                vector<unsigned char> packet;
+                packet.resize(sizeof(data_header) + out_len);
+                memcpy(packet.data(), &data_header, sizeof(data_header));
+                memcpy(packet.data() + sizeof(data_header), out_buffer, out_len);
 
-            memcpy(packet.data(), &data_header, sizeof(data_header));
-            memcpy(packet.data() + sizeof(data_header), buffer, bytes_read);
-
-            if (!send_full_packet(data_sock.get(), packet.data(), packet.size())) {
-                cerr << "Failed to send data packet.\n";
-                fclose(file_fd);
-                pthread_mutex_unlock(&mutex_data);
-                return 5;//"Error: Failed to send data packet";
+                if (!send_full_packet(data_sock.get(), packet.data(), packet.size())) {
+                    cerr << "Failed to send file data.\n";
+                    break;
+                }
             }
-            total_sent += bytes_read;
         } else {
-            if (ferror(file_fd)) {
-                cerr << "Error reading file.\n";
-                fclose(file_fd);
-                pthread_mutex_unlock(&mutex_data);
-                return 10;
-            }
             break;
         }
     }
+    
+    EVP_EncryptFinal_ex(ctx, out_buffer, &out_len);
+    if (out_len > 0) {
+        Header data_header;
+        data_header.op_code = UPLOAD;
+        data_header.packet_identifier = PACKET_IDENTIFIER;
+        data_header.data_len = htobe64(out_len);
+
+        vector<unsigned char> packet;
+        packet.resize(sizeof(data_header) + out_len);
+        memcpy(packet.data(), &data_header, sizeof(data_header));
+        memcpy(packet.data() + sizeof(data_header), out_buffer, out_len);
+        send_full_packet(data_sock.get(), packet.data(), packet.size());
+    }
+
+    EVP_CIPHER_CTX_free(ctx);
     fclose(file_fd);
 
     //citim header
@@ -518,6 +544,14 @@ int ClientBackend::download(string filename) {
 
     unsigned long filesize = be64toh(file_header.data_len);
     
+    unsigned char key[32];
+    if (!recv_full_packet(data_sock.get(), key, 32)) {
+        cerr << "Failed to receive encryption key.\n";
+        pthread_mutex_unlock(&mutex_data);
+        return 14;
+    }
+    filesize -= 32;
+
     FILE *f = fopen(filename.c_str(), "wb");
     if (!f) {
         cerr << "Cannot open file for writing: " << filename << "\n";
@@ -525,22 +559,39 @@ int ClientBackend::download(string filename) {
         return 10;
     }
 
+    EVP_CIPHER_CTX *ctx = EVP_CIPHER_CTX_new();
+    EVP_DecryptInit_ex(ctx, EVP_aes_256_ecb(), NULL, key, NULL);
+
     unsigned long received = 0;
-    char buffer[4096];
+    unsigned char in_buffer[4096];
+    unsigned char out_buffer[4096 + 16];
+    int out_len;
+
     while (received < filesize) {
-        unsigned long chunk = sizeof(buffer);
+        unsigned long chunk = sizeof(in_buffer);
         if (filesize - received < chunk) chunk = filesize - received;
         
-        if (!recv_full_packet(data_sock.get(), buffer, chunk)) {
+        if (!recv_full_packet(data_sock.get(), in_buffer, chunk)) {
             cerr << "Connection lost during download.\n";
             fclose(f);
             remove(filename.c_str());
             pthread_mutex_unlock(&mutex_data);
             return 11;
         }
-        fwrite(buffer, 1, chunk, f);
+        
+        EVP_DecryptUpdate(ctx, out_buffer, &out_len, in_buffer, chunk);
+        if (out_len > 0) {
+            fwrite(out_buffer, 1, out_len, f);
+        }
         received += chunk;
     }
+    
+    EVP_DecryptFinal_ex(ctx, out_buffer, &out_len);
+    if (out_len > 0) {
+        fwrite(out_buffer, 1, out_len, f);
+    }
+
+    EVP_CIPHER_CTX_free(ctx);
     fclose(f);
 
     // Wait for final OK
@@ -683,6 +734,18 @@ string ClientBackend::share_file(string filename, string target_username) {
     if (!recv_full_packet(user_sock.get(), &resp, sizeof(resp))) {
         pthread_mutex_unlock(&mutex_user);
         return "Error: Server disconnected";
+    }
+
+    unsigned long len = be64toh(resp.data_len);
+    if (len > 0) {
+        vector<char> buffer(len + 1);
+        if (!recv_full_packet(user_sock.get(), buffer.data(), len)) {
+            pthread_mutex_unlock(&mutex_user);
+            return "Error: Failed to receive response message";
+        }
+        buffer[len] = '\0';
+        pthread_mutex_unlock(&mutex_user);
+        return string(buffer.data());
     }
 
     pthread_mutex_unlock(&mutex_user);

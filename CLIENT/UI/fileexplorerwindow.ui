@@ -91,7 +91,7 @@
     </property>
    </widget>
   </widget>
-  <widget class="QListWidget" name="fileList">
+  <widget class="QTreeWidget" name="fileList">
    <property name="geometry">
     <rect>
      <x>50</x>
@@ -105,6 +105,21 @@
      <pointsize>14</pointsize>
     </font>
    </property>
+   <column>
+    <property name="text">
+     <string>Name</string>
+    </property>
+   </column>
+   <column>
+    <property name="text">
+     <string>Size</string>
+    </property>
+   </column>
+   <column>
+    <property name="text">
+     <string>From</string>
+    </property>
+   </column>
   </widget>
   <widget class="QPushButton" name="pushButton_5">
    <property name="geometry">
