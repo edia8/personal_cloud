@@ -5,6 +5,8 @@
 #include <QMessageBox>
 #define IP "127.0.0.1"
 #define SV "10.100.0.30"
+#define STRINGIFY(x) #x
+#define TOSTRING(x) STRINGIFY(x)
 MainWindow::MainWindow(QWidget *parent)
     : QMainWindow(parent)
     , ui(new Ui::MainWindow) // Initialize the UI pointer
@@ -14,10 +16,8 @@ MainWindow::MainWindow(QWidget *parent)
 
     // Connect to server on startup
     if (!client.connect(IP, PORT)) {
-        QMessageBox::critical(this, "Connection Error", "Could not connect to server at 10.100.0.30:" + QString::number(PORT));
+        QMessageBox::critical(this, "Connection Error", "Could not connect to server at 127.0.0.1:" + QString::number(PORT));
     }
-
-    // --- YOUR LOGIC GOES HERE ---
 
     // Connect the Show Password button
     connect(ui->toolButton_showPw, &QToolButton::toggled, this, [=](bool checked) {
